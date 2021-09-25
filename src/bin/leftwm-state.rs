@@ -1,5 +1,5 @@
+use anyhow::Result;
 use clap::{value_t, App, Arg};
-use leftwm::errors::Result;
 use leftwm::models::dto::{DisplayState, ManagerState};
 use std::ffi::OsStr;
 use std::path::Path;

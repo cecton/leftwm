@@ -6,6 +6,7 @@ use crate::models::WindowHandle;
 use crate::models::Workspace;
 use crate::state::State;
 use crate::utils::child_process::Children;
+use std::process::Child;
 use std::sync::{atomic::AtomicBool, Arc};
 
 /// Maintains current program state.
@@ -191,6 +192,12 @@ where
             ws.update_for_theme(&self.state.config);
         }
         true
+    }
+
+    /// Consume [`Children`] provided in argument so they can be managed and reap by the
+    /// [`Manager`].
+    pub fn add_child(&mut self, child: Child) {
+        self.children.insert(child);
     }
 }
 

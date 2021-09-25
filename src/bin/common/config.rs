@@ -1,11 +1,12 @@
 //! `LeftWM` general configuration
 
-use super::{BaseCommand, ThemeSetting};
+use super::{BaseCommand, Nanny, StateSocket, ThemeSetting};
 use anyhow::{Context, Result};
+use futures::prelude::*;
 use leftwm::{
     config::{ScratchPad, Workspace},
     layouts::{Layout, LAYOUTS},
-    models::{FocusBehaviour, Gutter, Margins, Size},
+    models::{dto::ManagerState, FocusBehaviour, Gutter, Margins, Size},
     DisplayServer, Manager,
 };
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
 use xdg::BaseDirectories;
 
@@ -124,6 +126,9 @@ pub struct Config {
 
     #[serde(skip)]
     pub theme_setting: ThemeSetting,
+
+    #[serde(skip)]
+    pub state_socket: StateSocket,
 }
 
 #[must_use]
@@ -428,6 +433,54 @@ impl leftwm::Config for Config {
             Err(err) => log::error!("Cannot open old state: {}", err),
         }
     }
+
+    fn on_startup<'a, SERVER: DisplayServer>(
+        manager: &'a mut Manager<Self, SERVER>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        match Nanny::run_global_up_script() {
+            Ok(Some(child)) => manager.add_child(child),
+            Ok(None) => {}
+            Err(err) => log::error!("Global up script faild: {}", err),
+        }
+        match Nanny::boot_current_theme() {
+            Ok(Some(child)) => manager.add_child(child),
+            Ok(None) => {}
+            Err(err) => log::error!("Theme loading failed: {}", err),
+        }
+
+        let socket_file = place_runtime_file("current_state.sock")
+            .expect("ERROR: couldn't create current_state.sock");
+
+        manager
+            .state
+            .config
+            .state_socket
+            .listen(socket_file)
+            .map(|res| {
+                if let Err(err) = res {
+                    log::error!("Couldn't connect to current_state.sock: {}", err);
+                }
+            })
+            .boxed()
+    }
+
+    fn on_shutdown<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        self.state_socket.shutdown().boxed()
+    }
+
+    fn on_state_update<'a>(
+        &'a mut self,
+        state: ManagerState,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        self.state_socket
+            .write_manager_state(state)
+            .map(|_| ())
+            .boxed()
+    }
+
+    fn pipe_file(&self) -> PathBuf {
+        place_runtime_file("commands.pipe").expect("ERROR: couldn't create commands.pipe")
+    }
 }
 
 impl Config {
@@ -436,6 +489,13 @@ impl Config {
             .as_deref()
             .unwrap_or_else(|| Path::new(STATE_FILE))
     }
+}
+
+fn place_runtime_file<P>(path: P) -> std::io::Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
+    xdg::BaseDirectories::with_prefix("leftwm")?.place_runtime_file(path)
 }
 
 impl Default for Config {
@@ -631,6 +691,8 @@ impl Default for Config {
             .map(|s| (*s).to_string())
             .collect();
 
+        let state_socket = StateSocket::default();
+
         Self {
             workspaces: Some(vec![]),
             tags: Some(tags),
@@ -645,6 +707,7 @@ impl Default for Config {
             theme_setting: ThemeSetting::default(),
             max_window_width: None,
             state: None,
+            state_socket,
         }
     }
 }

@@ -35,20 +35,25 @@ impl CommandPipe {
     ///
     /// Will error if unable to `mkfifo`, likely a filesystem issue
     /// such as inadequate permissions.
-    pub async fn new(pipe_file: PathBuf) -> Result<Self, std::io::Error> {
+    pub async fn new(pipe_file: impl Into<PathBuf>) -> Result<Self, std::io::Error> {
+        let pipe_file = pipe_file.into();
+
         fs::remove_file(pipe_file.as_path()).await.ok();
         if let Err(e) = nix::unistd::mkfifo(&pipe_file, nix::sys::stat::Mode::S_IRWXU) {
             log::error!("Failed to create new fifo {:?}", e);
         }
 
-        let path = pipe_file.clone();
-        let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while !tx.is_closed() {
-                read_from_pipe(&path, &tx).await;
-            }
-            fs::remove_file(path).await.ok();
-        });
+        let rx = {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let pipe_file = pipe_file.clone();
+            tokio::spawn(async move {
+                while !tx.is_closed() {
+                    read_from_pipe(&pipe_file, &tx).await;
+                }
+                fs::remove_file(&pipe_file).await.ok();
+            });
+            rx
+        };
 
         Ok(Self { pipe_file, rx })
     }

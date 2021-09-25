@@ -1,8 +1,5 @@
-use crate::config::Config;
-use crate::display_servers::DisplayServer;
-use crate::errors::{LeftError, Result};
-use crate::models::dto::ManagerState;
-use crate::models::Manager;
+use anyhow::{Context, Result};
+use leftwm::models::dto::ManagerState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -57,12 +54,8 @@ impl StateSocket {
     /// # Errors
     /// Will return Err if a mut ref to the peer is unavailable.
     /// Will return error if state cannot be serialized
-    pub async fn write_manager_state<C: Config, SERVER: DisplayServer>(
-        &mut self,
-        manager: &Manager<C, SERVER>,
-    ) -> Result<()> {
+    pub async fn write_manager_state(&mut self, state: ManagerState) -> Result<()> {
         if self.listener.is_some() {
-            let state: ManagerState = manager.into();
             let mut json = serde_json::to_string(&state)?;
             json.push('\n');
             let mut state = self.state.lock().await;
@@ -71,7 +64,7 @@ impl StateSocket {
                 for peer in &mut state.peers {
                     if peer
                         .as_mut()
-                        .ok_or(LeftError::StreamError)?
+                        .context("stream error")?
                         .write_all(json.as_bytes())
                         .await
                         .is_err()
@@ -112,8 +105,119 @@ impl StateSocket {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::utils::helpers::test::temp_path;
+    use leftwm::config::{Config, ScratchPad, Workspace};
+    use leftwm::layouts::Layout;
+    use leftwm::models::{Gutter, Margins, Screen, Size};
+    use leftwm::{DisplayEvent, DisplayServer, Keybind, Manager};
     use tokio::io::{AsyncBufReadExt, BufReader};
+
+    // TODO Refactor duplicated code after crate have been split
+
+    #[derive(Clone)]
+    pub struct MockDisplayServer {
+        pub screens: Vec<Screen>,
+    }
+
+    impl DisplayServer for MockDisplayServer {
+        fn new(_: &impl Config) -> Self {
+            Self { screens: vec![] }
+        }
+
+        //testing a couple mock event
+        fn get_next_events(&mut self) -> Vec<DisplayEvent> {
+            vec![]
+        }
+
+        fn wait_readable(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+            todo!()
+        }
+
+        fn flush(&self) {
+            todo!()
+        }
+
+        fn verify_focused_window(&self) -> Vec<DisplayEvent> {
+            todo!()
+        }
+    }
+
+    pub async fn temp_path() -> std::io::Result<std::path::PathBuf> {
+        tokio::task::spawn_blocking(|| tempfile::Builder::new().tempfile_in("target"))
+            .await
+            .expect("Blocking task joined")?
+            .into_temp_path()
+            .keep()
+            .map_err(Into::into)
+    }
+
+    pub fn new_manager(tags: Vec<String>) -> Manager<TestConfig, MockDisplayServer> {
+        Manager::new(TestConfig { tags })
+    }
+
+    #[allow(clippy::module_name_repetitions)]
+    pub struct TestConfig {
+        pub tags: Vec<String>,
+    }
+
+    impl Config for TestConfig {
+        fn mapped_bindings(&self) -> Vec<Keybind> {
+            unimplemented!()
+        }
+        fn create_list_of_tags(&self) -> Vec<String> {
+            self.tags.clone()
+        }
+        fn workspaces(&self) -> Option<&[Workspace]> {
+            unimplemented!()
+        }
+        fn mousekey(&self) -> &str {
+            unimplemented!()
+        }
+        fn disable_current_tag_swap(&self) -> bool {
+            false
+        }
+        fn create_list_of_scratchpads(&self) -> Vec<ScratchPad> {
+            vec![]
+        }
+        fn layouts(&self) -> Vec<Layout> {
+            vec![]
+        }
+        fn focus_new_windows(&self) -> bool {
+            false
+        }
+        fn border_width(&self) -> i32 {
+            0
+        }
+        fn margin(&self) -> Margins {
+            Margins::new(0)
+        }
+        fn workspace_margin(&self) -> Option<Margins> {
+            None
+        }
+        fn gutter(&self) -> Option<Vec<Gutter>> {
+            unimplemented!()
+        }
+        fn default_border_color(&self) -> &str {
+            unimplemented!()
+        }
+        fn floating_border_color(&self) -> &str {
+            unimplemented!()
+        }
+        fn focused_border_color(&self) -> &str {
+            unimplemented!()
+        }
+        fn on_new_window_cmd(&self) -> Option<String> {
+            None
+        }
+        fn get_list_of_gutters(&self) -> Vec<Gutter> {
+            Default::default()
+        }
+        fn max_window_width(&self) -> Option<Size> {
+            None
+        }
+        fn pipe_file(&self) -> PathBuf {
+            todo!()
+        }
+    }
 
     #[test]
     fn multiple_peers() {
@@ -121,12 +225,15 @@ mod test {
         rt.block_on(multiple_peers_async());
     }
     async fn multiple_peers_async() {
-        let manager = Manager::new_test(vec![]);
+        let manager = new_manager(vec![]);
 
         let socket_file = temp_path().await.unwrap();
         let mut state_socket = StateSocket::default();
         state_socket.listen(socket_file.clone()).await.unwrap();
-        state_socket.write_manager_state(&manager).await.unwrap();
+        state_socket
+            .write_manager_state((&manager).into())
+            .await
+            .unwrap();
 
         assert_eq!(
             serde_json::to_string(&Into::<ManagerState>::into(&manager)).unwrap(),
@@ -167,12 +274,15 @@ mod test {
         rt.block_on(get_update_async());
     }
     async fn get_update_async() {
-        let manager = Manager::new_test(vec![]);
+        let manager = new_manager(vec![]);
 
         let socket_file = temp_path().await.unwrap();
         let mut state_socket = StateSocket::default();
         state_socket.listen(socket_file.clone()).await.unwrap();
-        state_socket.write_manager_state(&manager).await.unwrap();
+        state_socket
+            .write_manager_state((&manager).into())
+            .await
+            .unwrap();
 
         let mut lines = BufReader::new(UnixStream::connect(socket_file).await.unwrap()).lines();
 
@@ -183,7 +293,10 @@ mod test {
 
         // Fake state update.
         state_socket.state.lock().await.last_state = String::default();
-        state_socket.write_manager_state(&manager).await.unwrap();
+        state_socket
+            .write_manager_state((&manager).into())
+            .await
+            .unwrap();
 
         assert_eq!(
             serde_json::to_string(&Into::<ManagerState>::into(&manager)).unwrap(),

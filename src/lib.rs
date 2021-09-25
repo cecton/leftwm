@@ -46,4 +46,3 @@ pub use models::Workspace;
 pub use state::State;
 pub use utils::child_process;
 pub use utils::command_pipe::CommandPipe;
-pub use utils::state_socket::StateSocket;

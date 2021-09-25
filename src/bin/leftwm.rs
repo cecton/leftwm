@@ -3,8 +3,10 @@
 //! If no arguments are passed, starts `leftwm-worker`. If arguments are passed, starts
 //! `leftwm-{check, command, state, theme}` as specified, and passes along any extra arguments.
 
+mod common;
+
 use clap::{crate_version, App, AppSettings, SubCommand};
-use leftwm::child_process::{self, Nanny};
+use leftwm::child_process::{self};
 use std::collections::BTreeMap;
 use std::env;
 use std::process::{exit, Command};
@@ -45,7 +47,7 @@ fn main() {
     // If _not_ invoked with a subcommand, start leftwm.
     if let Ok(current_exe) = std::env::current_exe() {
         // Boot everything in ~/.config/autostart
-        let mut children = Nanny::autostart();
+        let mut children = common::Nanny::autostart();
 
         let flag = Arc::new(AtomicBool::new(false));
         child_process::register_child_hook(flag.clone());

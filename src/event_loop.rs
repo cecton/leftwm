@@ -1,32 +1,19 @@
-use crate::{child_process::Nanny, config::Config, models::FocusBehaviour};
-use crate::{CommandPipe, DisplayServer, Manager, Mode, StateSocket, Window, Workspace};
-use std::path::{Path, PathBuf};
-use std::sync::{atomic::Ordering, Once};
+use crate::{config::Config, models::FocusBehaviour};
+use crate::{CommandPipe, DisplayServer, Manager, Mode, Window, Workspace};
+use std::sync::atomic::Ordering;
 
 impl<C: Config, SERVER: DisplayServer> Manager<C, SERVER> {
     pub async fn event_loop(mut self) {
-        let socket_file = place_runtime_file("current_state.sock")
-            .expect("ERROR: couldn't create current_state.sock");
-        let mut state_socket = StateSocket::default();
-        state_socket
-            .listen(socket_file)
-            .await
-            .expect("ERROR: couldn't connect to current_state.sock");
-
-        let pipe_file =
-            place_runtime_file("commands.pipe").expect("ERROR: couldn't create commands.pipe");
-        let mut command_pipe = CommandPipe::new(pipe_file)
+        let mut command_pipe = CommandPipe::new(self.state.config.pipe_file())
             .await
             .expect("ERROR: couldn't connect to commands.pipe");
 
-        //start the current theme
-        let after_first_loop: Once = Once::new();
-
         //main event loop
         let mut event_buffer = vec![];
+        let mut startup = true;
         loop {
             if self.state.mode == Mode::Normal {
-                state_socket.write_manager_state(&self).await.ok();
+                self.state.config.on_state_update((&self).into()).await;
             }
             self.display_server.flush();
 
@@ -86,40 +73,23 @@ impl<C: Config, SERVER: DisplayServer> Manager<C, SERVER> {
 
             //after the very first loop run the 'up' scripts (global and theme). we need the unix
             //socket to already exist.
-            after_first_loop.call_once(|| {
-                match Nanny::run_global_up_script() {
-                    Ok(child) => {
-                        child.map(|child| self.children.insert(child));
-                    }
-                    Err(err) => log::error!("Global up script faild: {}", err),
-                }
-                match Nanny::boot_current_theme() {
-                    Ok(child) => {
-                        child.map(|child| self.children.insert(child));
-                    }
-                    Err(err) => log::error!("Theme loading failed: {}", err),
-                }
-
+            if startup {
+                startup = false;
+                C::on_startup(&mut self).await;
                 C::load_state(&mut self);
-            });
+            }
 
             if self.reap_requested.swap(false, Ordering::SeqCst) {
                 self.children.reap();
             }
 
             if self.reload_requested {
-                state_socket.shutdown().await;
                 break;
             }
         }
-    }
-}
 
-fn place_runtime_file<P>(path: P) -> std::io::Result<PathBuf>
-where
-    P: AsRef<Path>,
-{
-    xdg::BaseDirectories::with_prefix("leftwm")?.place_runtime_file(path)
+        self.state.config.on_shutdown().await;
+    }
 }
 
 async fn timeout(mills: u64) {

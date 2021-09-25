@@ -4,10 +4,13 @@ mod workspace_config;
 
 use crate::display_servers::DisplayServer;
 use crate::layouts::Layout;
-pub use crate::models::{FocusBehaviour, Gutter, Margins, Size};
+pub use crate::models::{dto::ManagerState, FocusBehaviour, Gutter, Margins, Size};
 use crate::Manager;
+use futures::prelude::*;
 pub use keybind::Keybind;
 pub use scratchpad::ScratchPad;
+use std::path::PathBuf;
+use std::pin::Pin;
 pub use workspace_config::Workspace;
 
 pub trait Config {
@@ -18,7 +21,9 @@ pub trait Config {
 
     fn workspaces(&self) -> Option<&[Workspace]>;
 
-    fn focus_behaviour(&self) -> FocusBehaviour;
+    fn focus_behaviour(&self) -> FocusBehaviour {
+        Default::default()
+    }
 
     fn mousekey(&self) -> &str;
 
@@ -31,10 +36,13 @@ pub trait Config {
 
     fn focus_new_windows(&self) -> bool;
 
-    fn command_handler<SERVER>(command: &str, manager: &mut Manager<Self, SERVER>) -> bool
+    fn command_handler<SERVER>(_command: &str, _manager: &mut Manager<Self, SERVER>) -> bool
     where
         Self: Sized,
-        SERVER: DisplayServer;
+        SERVER: DisplayServer,
+    {
+        false
+    }
 
     fn border_width(&self) -> i32;
     fn margin(&self) -> Margins;
@@ -56,16 +64,43 @@ pub trait Config {
     /// if unable to serialize the text.
     /// May be caused by inadequate permissions, not enough
     /// space on drive, or other typical filesystem issues.
-    fn save_state<SERVER>(manager: &Manager<Self, SERVER>)
+    fn save_state<SERVER>(_manager: &Manager<Self, SERVER>)
     where
         Self: Sized,
-        SERVER: DisplayServer;
+        SERVER: DisplayServer,
+    {
+    }
 
     /// Load saved state if it exists.
-    fn load_state<SERVER>(manager: &mut Manager<Self, SERVER>)
+    fn load_state<SERVER>(_manager: &mut Manager<Self, SERVER>)
     where
         Self: Sized,
-        SERVER: DisplayServer;
+        SERVER: DisplayServer,
+    {
+    }
+
+    fn on_startup<'a, SERVER>(
+        _manager: &'a mut Manager<Self, SERVER>,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+    where
+        Self: Sized,
+        SERVER: DisplayServer,
+    {
+        Box::pin(async {})
+    }
+
+    fn on_shutdown<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        Box::pin(async {})
+    }
+
+    fn on_state_update<'a>(
+        &'a mut self,
+        _state: ManagerState,
+    ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        Box::pin(async {})
+    }
+
+    fn pipe_file(&self) -> PathBuf;
 }
 
 #[cfg(test)]
@@ -85,9 +120,6 @@ impl Config for TestConfig {
     fn workspaces(&self) -> Option<&[Workspace]> {
         unimplemented!()
     }
-    fn focus_behaviour(&self) -> FocusBehaviour {
-        FocusBehaviour::Sloppy
-    }
     fn mousekey(&self) -> &str {
         unimplemented!()
     }
@@ -102,13 +134,6 @@ impl Config for TestConfig {
     }
     fn focus_new_windows(&self) -> bool {
         false
-    }
-    fn command_handler<SERVER>(_command: &str, _manager: &mut Manager<Self, SERVER>) -> bool
-    where
-        Self: Sized,
-        SERVER: DisplayServer,
-    {
-        unimplemented!()
     }
     fn border_width(&self) -> i32 {
         0
@@ -140,19 +165,7 @@ impl Config for TestConfig {
     fn max_window_width(&self) -> Option<Size> {
         None
     }
-    fn save_state<SERVER>(_manager: &Manager<Self, SERVER>)
-    where
-        Self: Sized,
-        SERVER: DisplayServer,
-    {
-        unimplemented!()
-    }
-    /// Load saved state if it exists.
-    fn load_state<SERVER>(_manager: &mut Manager<Self, SERVER>)
-    where
-        Self: Sized,
-        SERVER: DisplayServer,
-    {
-        unimplemented!()
+    fn pipe_file(&self) -> PathBuf {
+        todo!()
     }
 }

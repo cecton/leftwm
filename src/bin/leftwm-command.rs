@@ -1,5 +1,5 @@
+use anyhow::Result;
 use clap::{App, Arg};
-use leftwm::errors::Result;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
 use xdg::BaseDirectories;
